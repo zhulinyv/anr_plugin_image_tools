@@ -54,8 +54,8 @@ def _extract_seed(image: Image.Image) -> str:
     ]
     try:
         candidates.extend(value for value in (lsb.nai_payload(image) or {}).values() if isinstance(value, str))
-    except Exception:
-        pass
+    except Exception as e:
+        logger.debug(f"读取隐藏参数失败: {e}")
     for raw in candidates:
         try:
             data = ujson.loads(raw)

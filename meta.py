@@ -113,13 +113,13 @@ def _collect_exif(image: Image.Image) -> dict[str, str]:
     try:
         for tag, value in exif.get_ifd(0x8769).items():
             result[f"Exif.{ExifTags.TAGS.get(tag, f'0x{tag:04X}')}"] = _decode(value)
-    except Exception:
-        pass
+    except Exception as e:
+        logger.debug(f"读取 EXIF 扩展信息失败: {e}")
     try:
         for tag, value in exif.get_ifd(0x8825).items():
             result[f"GPS.{ExifTags.GPSTAGS.get(tag, f'0x{tag:04X}')}"] = _decode(value)
-    except Exception:
-        pass
+    except Exception as e:
+        logger.debug(f"读取 GPS 信息失败: {e}")
     return result
 
 
@@ -160,8 +160,8 @@ def read_params(src: str) -> dict:
         ]
         try:
             candidates.extend(value for value in (lsb.nai_payload(image) or {}).values() if isinstance(value, str))
-        except Exception:
-            pass
+        except Exception as e:
+            logger.debug(f"读取隐藏参数失败: {e}")
         for raw in candidates:
             try:
                 data = ujson.loads(raw)
@@ -353,6 +353,7 @@ def _dump_exif(exif_dict: dict) -> bytes | None:
         return piexif.dump(exif_dict)
     except Exception as e:
         logger.warning(f"EXIF 序列化失败, 已跳过 EXIF 写入: {e}")
+        logger.opt(exception=True).debug("EXIF 序列化失败堆栈:")
         return None
 
 

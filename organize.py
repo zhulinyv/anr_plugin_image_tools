@@ -110,6 +110,7 @@ def group_duplicates(files: list[str], threshold: int) -> tuple[list[list[str]],
                 image.close()
         except Exception as e:
             logger.warning(f"计算指纹失败, 已跳过 ({src}): {e}")
+            logger.opt(exception=True).debug("计算指纹失败堆栈:")
             continue
         hashes[src] = f"{fingerprint:016x}"
         for index, (ref_fingerprint, _ref) in enumerate(fingerprints):
@@ -245,6 +246,7 @@ def dedupe_action(values: dict) -> dict:
                     moved.append(f"{os.path.basename(src)} → {target}")
                 except Exception as e:
                     logger.error(f"归集重复图失败 ({src}): {e}")
+                    logger.opt(exception=True).debug("归集重复图失败堆栈:")
         if moved:
             text_lines.append("")
             text_lines.append(f"📦 已归集 {len(moved)} 张重复图 → {target}")
@@ -280,6 +282,7 @@ def manifest_rows(files: list[str]) -> tuple[list[list], int]:
                 image.close()
         except Exception as e:
             logger.warning(f"读取图片信息失败, 已跳过 ({src}): {e}")
+            logger.opt(exception=True).debug("读取图片信息失败堆栈:")
             continue
         params = read_params(src)
         if params:
@@ -416,6 +419,7 @@ def rename_action(values: dict) -> dict:
                 lines.append(f"{os.path.basename(src)} → {destination.name}")
         except Exception as e:
             logger.error(f"重命名失败 ({src}): {e}")
+            logger.opt(exception=True).debug("重命名失败堆栈:")
             errors.append(f"{os.path.basename(src)}: {e}")
 
     head = (

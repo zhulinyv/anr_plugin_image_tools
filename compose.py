@@ -284,6 +284,7 @@ def _split_action(files: list[str], values: dict) -> dict:
             texts.append(f"{os.path.basename(src)} → {len(tiles)} 块 ({rows}×{cols}) · {target}")
         except Exception as e:
             logger.error(f"分割失败 ({src}): {e}")
+            logger.opt(exception=True).debug("分割失败堆栈:")
             errors.append(f"{os.path.basename(src)}: {e}")
     if not outputs:
         raise ValueError("分割失败: " + ("; ".join(errors) if errors else "没有可处理的图片"))

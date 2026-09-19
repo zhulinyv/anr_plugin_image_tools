@@ -352,6 +352,7 @@ def build_pnginfo(text: dict[str, str] | None) -> PngInfo:
             pnginfo.add_text(str(key), value if isinstance(value, str) else str(value))
         except Exception as e:
             logger.warning(f"文本块 {key} 写入失败, 已跳过: {e}")
+            logger.opt(exception=True).debug("写入文本块失败堆栈:")
     return pnginfo
 
 
