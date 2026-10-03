@@ -55,11 +55,11 @@
 
   ```
   Title=我的作品
-  Artist=zhuli
+  Artist=xxxxx
   ```
   或
   ```json
-  {"Title": "我的作品", "Artist": "zhuli", "Comment": {"prompt": "1girl", "seed": 42}}
+  {"Title": "我的作品", "Artist": "xxxxx", "Comment": {"prompt": "1girl", "seed": 42}}
   ```
 
 - **写入隐写数据**: 见下面的格式说明。
