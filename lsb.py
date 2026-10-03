@@ -218,15 +218,37 @@ def erase(image: Image.Image):
     return Image.fromarray(array), notes
 
 
-def has_nai_data(image: Image.Image) -> bool:
-    """检测 NovelAI 的 stealth_pngcomp 隐写数据。"""
-    try:
-        from utils.naimeta import extract_data
+def has_nai_data(image: Image.Image, rgba: np.ndarray | None = None) -> bool:
+    """检测 NovelAI 的 stealth_pngcomp 隐写数据。
 
-        extract_data(image)
+    rgba: 调用方已经解好的 RGBA 数组 (可选)。传入可避免 utils.naimeta 再解一遍像素 ——
+    这是热路径上最主要的浪费: extract() + has_nai_data() 原本各解一次全图。
+    """
+    try:
+        from utils.naimeta import extract_data, extract_data_from_array
+
+        if rgba is not None:
+            # 复用已解好的像素: 同一套 LSB 读取逻辑, 但不再重复 np.array(convert("RGBA"))
+            extract_data_from_array(rgba)
+        else:
+            extract_data(image)
         return True
-    except Exception:
+    except Exception as e:
+        logger.debug(f"NovelAI 隐写数据探测失败 (视为无隐写): {e}")
         return False
+
+
+def has_any_stego(image: Image.Image) -> tuple[bool, dict | None]:
+    """一次解码同时判断"本插件的隐写"与"NovelAI 的隐写", 返回 (是否有任一, 本插件数据或 None)。
+
+    替代原先三处重复且各解一遍全图的表达式
+    `lsb.extract(image).get("found") or lsb.has_nai_data(image)`。
+    """
+    array = np.array(image.convert("RGBA"))
+    mine = extract(image)
+    if mine.get("found"):
+        return True, mine
+    return has_nai_data(image, rgba=array), None
 
 
 # NovelAI 隐写数据的魔数与头部布局: "stealth_pngcomp" + 4 字节载荷位数

@@ -39,9 +39,19 @@ radio 走的是 CSS class 判断, 不受影响。
 from __future__ import annotations
 
 from plugins.anr_plugin_image_tools import img_ops, lsb, meta
-from plugins.anr_plugin_image_tools.common import GRID_POSITIONS, OUTPUT_FORMATS, strip_prefix
-from plugins.anr_plugin_image_tools.meta import CLEAR_TARGETS, PARAM_MODES, PARAM_SOURCES, PARAM_TRANSFER_KEYS
-from plugins.anr_plugin_image_tools.decl import OUTPUT_FIELDS, SOURCE_FIELDS, fields, info, section, switch
+from plugins.anr_plugin_image_tools.common import (
+    GRID_POSITIONS,
+    OUTPUT_FORMATS,
+    strip_prefix,
+)
+from plugins.anr_plugin_image_tools.decl import (
+    OUTPUT_FIELDS,
+    SOURCE_FIELDS,
+    fields,
+    info,
+    section,
+    switch,
+)
 from plugins.anr_plugin_image_tools.img_ops import (
     CROP_RATIOS,
     FLIP_MODES,
@@ -51,6 +61,12 @@ from plugins.anr_plugin_image_tools.img_ops import (
     ROTATE_MODES,
     TRIM_REFS,
 )
+from plugins.anr_plugin_image_tools.meta import (
+    CLEAR_TARGETS,
+    PARAM_MODES,
+    PARAM_SOURCES,
+    PARAM_TRANSFER_KEYS,
+)
 from plugins.anr_plugin_image_tools.panels_extra import extra_panels
 from utils.plugins import Action, Field, Panel, Plugin
 
@@ -58,7 +74,9 @@ from utils.plugins import Action, Field, Panel, Plugin
 def register(plugin: Plugin):
     plugin.title = "图片工具"
     plugin.icon = "🛠️"
-    plugin.description = "裁剪 / 旋转 / 翻转 / 缩放 / 压缩 / 格式转换 / 元数据读写清除 / LSB 隐写"
+    plugin.description = (
+        "裁剪 / 旋转 / 翻转 / 缩放 / 压缩 / 格式转换 / 元数据读写清除 / LSB 隐写"
+    )
 
     # ------------------------------------------------------------ 变换
     transform = Panel(
@@ -69,11 +87,26 @@ def register(plugin: Plugin):
         fields=[
             section("tf_sec_input", "输入", "单张图片或整个目录批处理"),
             *fields("tf_", "_edit", SOURCE_FIELDS),
-            Field(id="tf_auto_orient", label="自动纠正 EXIF 方向 (手机/相机竖拍图需勾选)", type="checkbox", default=True),
+            Field(
+                id="tf_auto_orient",
+                label="自动纠正 EXIF 方向 (手机/相机竖拍图需勾选)",
+                type="checkbox",
+                default=True,
+            ),
             # ===== 裁剪 =====
-            section("tf_sec_crop", "裁剪", "选中「裁剪」后才展开裁剪参数 · 定比例会自动算宽高"),
+            section(
+                "tf_sec_crop",
+                "裁剪",
+                "选中「裁剪」后才展开裁剪参数 · 定比例会自动算宽高",
+            ),
             # 与其它分区一致: 开关 radio 是权威, 选「不裁剪」时下面的参数全部收起、后端也不会裁剪
-            Field(id="tf_crop", label="裁剪", type="radio", options=["不裁剪", "裁剪"], default="不裁剪"),
+            Field(
+                id="tf_crop",
+                label="裁剪",
+                type="radio",
+                options=["不裁剪", "裁剪"],
+                default="不裁剪",
+            ),
             Field(
                 id="tf_crop_ratio",
                 label="裁剪比例",
@@ -90,7 +123,10 @@ def register(plugin: Plugin):
                 min=0,
                 step=1,
                 row_group="crop",
-                show_if=[{"field": "tf_crop", "equals": "裁剪"}, {"field": "tf_crop_ratio", "equals": "自由尺寸"}],
+                show_if=[
+                    {"field": "tf_crop", "equals": "裁剪"},
+                    {"field": "tf_crop_ratio", "equals": "自由尺寸"},
+                ],
             ),
             Field(
                 id="tf_crop_h",
@@ -100,7 +136,10 @@ def register(plugin: Plugin):
                 min=0,
                 step=1,
                 row_group="crop",
-                show_if=[{"field": "tf_crop", "equals": "裁剪"}, {"field": "tf_crop_ratio", "equals": "自由尺寸"}],
+                show_if=[
+                    {"field": "tf_crop", "equals": "裁剪"},
+                    {"field": "tf_crop_ratio", "equals": "自由尺寸"},
+                ],
             ),
             Field(
                 id="tf_crop_percent",
@@ -108,7 +147,10 @@ def register(plugin: Plugin):
                 type="checkbox",
                 default=False,
                 row_group="crop_opt",
-                show_if=[{"field": "tf_crop", "equals": "裁剪"}, {"field": "tf_crop_ratio", "equals": "自由尺寸"}],
+                show_if=[
+                    {"field": "tf_crop", "equals": "裁剪"},
+                    {"field": "tf_crop_ratio", "equals": "自由尺寸"},
+                ],
             ),
             Field(
                 id="tf_crop_mode",
@@ -151,7 +193,11 @@ def register(plugin: Plugin):
                 show_if={"field": "tf_crop_mode", "equals": "指定起点"},
             ),
             # ===== 自动裁边 =====
-            section("tf_sec_trim", "自动裁边", "裁掉四周的纯色 / 透明边 (容差内视为边色), 不处理内部空洞"),
+            section(
+                "tf_sec_trim",
+                "自动裁边",
+                "裁掉四周的纯色 / 透明边 (容差内视为边色), 不处理内部空洞",
+            ),
             switch("tf_trim", "自动裁边", "裁边", "不裁边"),
             Field(
                 id="tf_trim_ref",
@@ -184,7 +230,11 @@ def register(plugin: Plugin):
                 show_if={"field": "tf_trim", "equals": "裁边"},
             ),
             # ===== 调整长宽 =====
-            section("tf_sec_size", "调整长宽", "独立的尺寸步骤 · 锁比例时按适配框内推导另一维"),
+            section(
+                "tf_sec_size",
+                "调整长宽",
+                "独立的尺寸步骤 · 锁比例时按适配框内推导另一维",
+            ),
             Field(
                 id="tf_set_size_mode",
                 label="调整长宽",
@@ -229,8 +279,18 @@ def register(plugin: Plugin):
                 show_if={"field": "tf_set_size_lock", "equals": True},
             ),
             # ===== 旋转 / 翻转 =====
-            section("tf_sec_rotate", "旋转与翻转", "任意角度为正时顺时针旋转, 可扩展画布避免裁掉四角"),
-            Field(id="tf_rotate", label="旋转", type="radio", options=ROTATE_MODES, default="不旋转"),
+            section(
+                "tf_sec_rotate",
+                "旋转与翻转",
+                "任意角度为正时顺时针旋转, 可扩展画布避免裁掉四角",
+            ),
+            Field(
+                id="tf_rotate",
+                label="旋转",
+                type="radio",
+                options=ROTATE_MODES,
+                default="不旋转",
+            ),
             Field(
                 id="tf_angle_value",
                 label="任意角度 (正 = 顺时针)",
@@ -250,10 +310,26 @@ def register(plugin: Plugin):
                 row_group="rot_extra",
                 show_if={"field": "tf_rotate", "equals": "任意角度"},
             ),
-            Field(id="tf_flip", label="镜像翻转", type="radio", options=FLIP_MODES, default="不翻转"),
+            Field(
+                id="tf_flip",
+                label="镜像翻转",
+                type="radio",
+                options=FLIP_MODES,
+                default="不翻转",
+            ),
             # ===== 缩放 =====
-            section("tf_sec_resize", "缩放", "按倍数 / 最长边 / 指定尺寸 · 下面的重采样滤镜同时作用于「调整长宽」"),
-            Field(id="tf_resize_mode", label="缩放方式", type="radio", options=RESIZE_MODES, default="不缩放"),
+            section(
+                "tf_sec_resize",
+                "缩放",
+                "按倍数 / 最长边 / 指定尺寸 · 下面的重采样滤镜同时作用于「调整长宽」",
+            ),
+            Field(
+                id="tf_resize_mode",
+                label="缩放方式",
+                type="radio",
+                options=RESIZE_MODES,
+                default="不缩放",
+            ),
             Field(
                 id="tf_resize_factor",
                 label="缩放倍数 (0.5 = 一半)",
@@ -318,7 +394,11 @@ def register(plugin: Plugin):
                 default="Lanczos (最清晰)",
             ),
             # ===== 扩展画布 =====
-            section("tf_sec_pad", "扩展画布", "补边不缩放 · 把图贴到更大的画布上, 用于补成目标比例 / 目标尺寸"),
+            section(
+                "tf_sec_pad",
+                "扩展画布",
+                "补边不缩放 · 把图贴到更大的画布上, 用于补成目标比例 / 目标尺寸",
+            ),
             switch("tf_pad", "扩展画布", "扩展", "不扩展"),
             Field(
                 id="tf_pad_mode",
@@ -336,7 +416,10 @@ def register(plugin: Plugin):
                 min=1,
                 step=1,
                 row_group="pad_ratio",
-                show_if=[{"field": "tf_pad", "equals": "扩展"}, {"field": "tf_pad_mode", "equals": "按比例补边"}],
+                show_if=[
+                    {"field": "tf_pad", "equals": "扩展"},
+                    {"field": "tf_pad_mode", "equals": "按比例补边"},
+                ],
             ),
             Field(
                 id="tf_pad_ratio_h",
@@ -346,7 +429,10 @@ def register(plugin: Plugin):
                 min=1,
                 step=1,
                 row_group="pad_ratio",
-                show_if=[{"field": "tf_pad", "equals": "扩展"}, {"field": "tf_pad_mode", "equals": "按比例补边"}],
+                show_if=[
+                    {"field": "tf_pad", "equals": "扩展"},
+                    {"field": "tf_pad_mode", "equals": "按比例补边"},
+                ],
             ),
             Field(
                 id="tf_pad_w",
@@ -356,7 +442,10 @@ def register(plugin: Plugin):
                 min=1,
                 step=1,
                 row_group="pad_wh",
-                show_if=[{"field": "tf_pad", "equals": "扩展"}, {"field": "tf_pad_mode", "equals": "按尺寸补边"}],
+                show_if=[
+                    {"field": "tf_pad", "equals": "扩展"},
+                    {"field": "tf_pad_mode", "equals": "按尺寸补边"},
+                ],
             ),
             Field(
                 id="tf_pad_h",
@@ -366,7 +455,10 @@ def register(plugin: Plugin):
                 min=1,
                 step=1,
                 row_group="pad_wh",
-                show_if=[{"field": "tf_pad", "equals": "扩展"}, {"field": "tf_pad_mode", "equals": "按尺寸补边"}],
+                show_if=[
+                    {"field": "tf_pad", "equals": "扩展"},
+                    {"field": "tf_pad_mode", "equals": "按尺寸补边"},
+                ],
             ),
             Field(
                 id="tf_pad_pos",
@@ -392,11 +484,24 @@ def register(plugin: Plugin):
                 type="color",
                 default="#ffffff",
                 row_group="pad_misc",
-                show_if=[{"field": "tf_pad", "equals": "扩展"}, {"field": "tf_pad_bg", "equals": "自定义颜色"}],
+                show_if=[
+                    {"field": "tf_pad", "equals": "扩展"},
+                    {"field": "tf_pad_bg", "equals": "自定义颜色"},
+                ],
             ),
             # ===== 输出 =====
-            section("tf_sec_output", "输出", "默认不覆盖原图, 输出为「原名 + 后缀」; 直接勾「覆盖原图」则改写原文件"),
-            Field(id="tf_out_format", label="输出格式", type="radio", options=OUTPUT_FORMATS, default="保持原格式"),
+            section(
+                "tf_sec_output",
+                "输出",
+                "默认不覆盖原图, 输出为「原名 + 后缀」; 直接勾「覆盖原图」则改写原文件",
+            ),
+            Field(
+                id="tf_out_format",
+                label="输出格式",
+                type="radio",
+                options=OUTPUT_FORMATS,
+                default="保持原格式",
+            ),
             Field(
                 id="tf_quality",
                 label="质量 (jpg / webp / avif)",
@@ -509,8 +614,18 @@ def register(plugin: Plugin):
         fields=[
             section("cv_sec_input", "输入", "单张图片或整个目录批处理"),
             *fields("cv_", "_out", SOURCE_FIELDS),
-            section("cv_sec_format", "压缩与格式", "png 无损 · jpg / webp / avif 支持质量与目标体积"),
-            Field(id="cv_out_format", label="输出格式", type="radio", options=OUTPUT_FORMATS, default="保持原格式"),
+            section(
+                "cv_sec_format",
+                "压缩与格式",
+                "png 无损 · jpg / webp / avif 支持质量与目标体积",
+            ),
+            Field(
+                id="cv_out_format",
+                label="输出格式",
+                type="radio",
+                options=OUTPUT_FORMATS,
+                default="保持原格式",
+            ),
             Field(
                 id="cv_quality",
                 label="质量 (jpg / webp / avif)",
@@ -596,7 +711,11 @@ def register(plugin: Plugin):
                 row_group="cv_thumb_row",
                 show_if={"field": "cv_thumb", "equals": "生成缩略图"},
             ),
-            section("cv_sec_output", "输出", "默认不覆盖原图, 输出为「原名 + 后缀」; 也可指定输出目录"),
+            section(
+                "cv_sec_output",
+                "输出",
+                "默认不覆盖原图, 输出为「原名 + 后缀」; 也可指定输出目录",
+            ),
         ]
         + fields("cv_", "_out", OUTPUT_FIELDS)
         + [
@@ -648,7 +767,11 @@ def register(plugin: Plugin):
         fields=[
             section("rd_sec_input", "输入", "单张图片或整个目录批处理"),
             *fields("rd_", "_meta", SOURCE_FIELDS),
-            section("rd_sec_password", "隐写解密", "加密的自定义隐写载荷需要密码才能读出内容"),
+            section(
+                "rd_sec_password",
+                "隐写解密",
+                "加密的自定义隐写载荷需要密码才能读出内容",
+            ),
             Field(
                 id="rd_password",
                 label="隐写密码 (留空 = 不解密; 读取加密图片时填这里)",
@@ -702,13 +825,19 @@ def register(plugin: Plugin):
             *fields("mw_", "_meta", SOURCE_FIELDS),
             section("mw_sec_meta", "元数据", "手填键值, 或从参考图搬运生成参数"),
             # 参数来源仍是 radio 开关: 选「从参考图搬运」时下面的手填框收起, 只有参考图参数生效
-            Field(id="mw_param_source", label="参数来源", type="radio", options=PARAM_SOURCES, default="手填 / JSON"),
+            Field(
+                id="mw_param_source",
+                label="参数来源",
+                type="radio",
+                options=PARAM_SOURCES,
+                default="手填 / JSON",
+            ),
             Field(
                 id="mw_meta_text",
                 label="写入元数据内容 (JSON 或 每行一个 `键=值`)",
                 type="textarea",
                 rows=6,
-                placeholder='{"Title": "我的作品", "Artist": "zhuli"}\n或\nTitle=我的作品\nArtist=zhuli',
+                placeholder='{"Title": "我的作品", "Artist": "xxxxx"}\n或\nTitle=我的作品\nArtist=xxxxx',
                 show_if={"field": "mw_param_source", "equals": "手填 / JSON"},
             ),
             Field(
@@ -731,14 +860,27 @@ def register(plugin: Plugin):
                 label="要搬运的字段",
                 type="checkbox_group",
                 options=PARAM_TRANSFER_KEYS,
-                default=["prompt", "uc", "seed", "steps", "scale", "sampler", "noise_schedule", "model"],
+                default=[
+                    "prompt",
+                    "uc",
+                    "seed",
+                    "steps",
+                    "scale",
+                    "sampler",
+                    "noise_schedule",
+                    "model",
+                ],
                 row_group="mw_param_pick",
                 show_if=[
                     {"field": "mw_param_source", "equals": "从参考图搬运"},
                     {"field": "mw_param_mode", "equals": "只搬指定字段"},
                 ],
             ),
-            section("mw_sec_stego", "隐写数据", "开关开启后才写入像素最低位, 输出统一转存 PNG"),
+            section(
+                "mw_sec_stego",
+                "隐写数据",
+                "开关开启后才写入像素最低位, 输出统一转存 PNG",
+            ),
             Field(
                 id="mw_use_stego",
                 label="写入隐写 (关 = 只写元数据)",
@@ -786,7 +928,11 @@ def register(plugin: Plugin):
                 row_group="mw_stego_row",
                 show_if={"field": "mw_use_stego", "equals": True},
             ),
-            section("mw_sec_output", "输出", "默认不覆盖原图, 输出为「原名 + 后缀」; 也可指定输出目录"),
+            section(
+                "mw_sec_output",
+                "输出",
+                "默认不覆盖原图, 输出为「原名 + 后缀」; 也可指定输出目录",
+            ),
             # row_group 与共享输出字段同名 → 和「输出后缀 / 覆盖原图」并成一行
             Field(
                 id="mw_quality",
@@ -882,7 +1028,11 @@ def register(plugin: Plugin):
                 placeholder="可留空; 写入 Auto-NovelAI-Refactor 字段",
                 row_group="cl_extra",
             ),
-            section("cl_sec_output", "输出", "默认不覆盖原图, 输出为「原名 + 后缀」; 也可指定输出目录"),
+            section(
+                "cl_sec_output",
+                "输出",
+                "默认不覆盖原图, 输出为「原名 + 后缀」; 也可指定输出目录",
+            ),
             # row_group 与共享输出字段同名 → 和「输出后缀 / 覆盖原图」并成一行
             Field(
                 id="cl_quality",
@@ -928,4 +1078,6 @@ def register(plugin: Plugin):
     )
 
     # 页签顺序: 先图像处理 (变换 / 压缩转换 / 调色 / 拼合 / 动图 / 装饰 / 整理), 再元数据三件套
-    plugin.panels.extend([transform, convert, *extra_panels(), meta_read, meta_write, meta_clear])
+    plugin.panels.extend(
+        [transform, convert, *extra_panels(), meta_read, meta_write, meta_clear]
+    )

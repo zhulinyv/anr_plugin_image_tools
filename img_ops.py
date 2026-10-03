@@ -12,7 +12,7 @@ from plugins.anr_plugin_image_tools.common import (
     FORMAT_EXT,
     GRID_POSITIONS,
     build_result,
-    collect_images,
+
     each_image,
     grab_meta,
     grid_anchor,
@@ -328,7 +328,8 @@ def transform_image(src: str, values: dict) -> tuple[Image.Image, dict, list[str
     返回 (图片, 元数据快照, 步骤说明, 原图是否含隐写数据)。
     """
     image = open_image(src)
-    had_lsb = lsb.extract(image).get("found") or lsb.has_nai_data(image)
+    # 一次解码同时判断两种隐写 (原先 extract + has_nai_data 各解一遍全图)
+    had_lsb, _stego = lsb.has_any_stego(image)
     steps: list[str] = []
     if values.get("auto_orient", True):
         orientation = image.getexif().get(0x0112)
@@ -344,14 +345,6 @@ def transform_image(src: str, values: dict) -> tuple[Image.Image, dict, list[str
     image = _flip(image, values, steps)
     image = _resize(image, values, steps)
     return image, meta, steps, had_lsb
-
-
-def _output_ext(values: dict) -> str | None:
-    return output_ext(values)
-
-
-def _save_suffix(values: dict, default: str) -> str:
-    return save_suffix(values, default)
 
 
 # ---------------------------------------------------------------- 动作入口
@@ -375,8 +368,8 @@ def transform_action(values: dict) -> dict:
     if not _configured(values):
         raise ValueError("没有可执行的变换: 请在裁剪 / 自动裁边 / 调整长宽 / 旋转 / 翻转 / 缩放 / 扩展画布中至少配置一项")
     keep_meta = bool(values.get("keep_meta", True))
-    suffix = _save_suffix(values, "_edit")
-    ext = _output_ext(values)
+    suffix = save_suffix(values, "_edit")
+    ext = output_ext(values)
 
     def worker(src: str):
         image, meta, steps, had_lsb = transform_image(src, values)
@@ -417,8 +410,8 @@ def transform_action(values: dict) -> dict:
 def convert_action(values: dict) -> dict:
     """动作: 压缩 / 格式转换 (可选最长边限制)。"""
     keep_meta = bool(values.get("keep_meta", True))
-    suffix = _save_suffix(values, "_out")
-    ext = _output_ext(values)
+    suffix = save_suffix(values, "_out")
+    ext = output_ext(values)
     target_kb = int(values.get("target_kb") or 0)
     max_side = int(values.get("max_side") or 0)
     thumb_on = (values.get("thumb") or "不生成") == "生成缩略图"
@@ -427,9 +420,14 @@ def convert_action(values: dict) -> dict:
     thumb_fmt = values.get("thumb_format") or "保持原格式"
 
     def _make_thumb(image: Image.Image, dst: str) -> tuple[str, int]:
-        """在主输出同级目录的 thumbs 子目录里生成缩略图 (不带元数据, 体积更小)。"""
-        thumb = image.copy()
-        thumb.thumbnail((thumb_side, thumb_side), Image.Resampling.LANCZOS)
+        """在主输出同级目录的 thumbs 子目录里生成缩略图 (不带元数据, 体积更小)。
+
+        用 resize() 而不是 copy()+thumbnail(): 后者会先把整张全尺寸图复制一份
+        (4K 图约 48MB), 而这里只需要缩小后的结果。
+        """
+        scale = min(thumb_side / image.width, thumb_side / image.height, 1.0)
+        new_size = (max(1, round(image.width * scale)), max(1, round(image.height * scale)))
+        thumb = image if new_size == image.size else image.resize(new_size, Image.Resampling.LANCZOS)
         t_ext = Path(dst).suffix
         if thumb_fmt != "保持原格式":
             t_ext = FORMAT_EXT.get("JPEG" if thumb_fmt.lower() in ("jpg", "jpeg") else thumb_fmt.upper(), t_ext)

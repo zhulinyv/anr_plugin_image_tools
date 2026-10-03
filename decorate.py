@@ -14,10 +14,9 @@ from __future__ import annotations
 
 import os
 
-import ujson
 from PIL import Image, ImageDraw, ImageFilter
 
-from plugins.anr_plugin_image_tools import lsb
+from plugins.anr_plugin_image_tools import lsb, meta
 from plugins.anr_plugin_image_tools.common import (
     build_result,
     each_image,
@@ -28,7 +27,6 @@ from plugins.anr_plugin_image_tools.common import (
     open_image,
     output_ext,
     parse_color,
-    read_png_text,
     resolve_output,
     save_image,
     save_suffix,
@@ -45,25 +43,18 @@ PLACEHOLDERS = "{name} 原文件名 · {index} 序号 · {seed} 生成种子 · 
 # ---------------------------------------------------------------- 水印
 
 
-def _extract_seed(image: Image.Image) -> str:
-    """从元数据 / NovelAI 隐写里取 seed (取不到返回空串, 占位符留空而不是留 `{seed}`)。"""
-    candidates: list[str] = [
-        value
-        for key, value in read_png_text(image).items()
-        if key in ("Comment", "parameters", "Description", "prompt")
-    ]
+def _extract_seed(src: str) -> str:
+    """从元数据 / NovelAI 隐写里取 seed (取不到返回空串, 占位符留空而不是留 `{seed}`)。
+
+    复用 meta.read_params (原先这里与 meta.py 的 read_params 是两份几乎相同的
+    "候选文本 + lsb.nai_payload + ujson 解析"逻辑, 容易各自漂移)。
+    """
     try:
-        candidates.extend(value for value in (lsb.nai_payload(image) or {}).values() if isinstance(value, str))
+        seed = meta.read_params(src).get("seed")
     except Exception as e:
         logger.debug(f"读取隐藏参数失败: {e}")
-    for raw in candidates:
-        try:
-            data = ujson.loads(raw)
-        except Exception:
-            continue
-        if isinstance(data, dict) and data.get("seed") is not None:
-            return str(data["seed"])
-    return ""
+        return ""
+    return "" if seed is None else str(seed)
 
 
 def _substitute(template: str, src: str, index: int, image: Image.Image, seed: str) -> str:
@@ -98,23 +89,46 @@ def _text_watermark(text: str, values: dict) -> Image.Image:
     return tile
 
 
+# 图片水印源文件缓存: 原实现每张图都 open_image() 重新从磁盘读取并解码同一个水印文件,
+# 300 张的批处理就是 300 次磁盘读 + 300 次解码。缓存按 (路径, mtime) 失效。
+_WM_SOURCE: dict[str, tuple[float, Image.Image]] = {}
+
+
+def _load_watermark_source(path: str) -> Image.Image:
+    """读取水印原图 (带缓存); 返回的是共享对象, 调用方必须 copy 后再改。"""
+    try:
+        mtime = os.path.getmtime(path)
+    except OSError:
+        mtime = 0.0
+    cached = _WM_SOURCE.get(path)
+    if cached is not None and cached[0] == mtime:
+        return cached[1]
+    image = open_image(path).convert("RGBA")
+    _WM_SOURCE[path] = (mtime, image)
+    return image
+
+
 def _image_watermark(path: str, canvas_width: int, values: dict) -> Image.Image:
-    """读入图片水印并按「占画布宽度百分比」缩放。"""
-    mark = open_image(path).convert("RGBA")
+    """读入图片水印并按「占画布宽度百分比」缩放 (源图带缓存, 结果每张图独立)。"""
+    mark = _load_watermark_source(path)
     scale = max(1, min(100, int(values.get("scale") or 20)))
     target_w = max(1, round(canvas_width * scale / 100))
     if mark.width != target_w:
         ratio = target_w / mark.width
         mark = mark.resize((target_w, max(1, round(mark.height * ratio))), Image.Resampling.LANCZOS)
+    else:
+        mark = mark.copy()  # 下面会 rotate/putalpha, 不能改动缓存里的对象
     return mark
 
 
 def _apply_opacity(mark: Image.Image, opacity: int) -> Image.Image:
     if opacity >= 100:
         return mark
+    if mark.mode != "RGBA":  # 水印贴图应恒为 RGBA; 防御性转换, 避免 getchannel("A") 抛错
+        mark = mark.convert("RGBA")
     factor = max(0, min(100, opacity)) / 100
     out = mark.copy()
-    out.putalpha(mark.split()[-1].point(lambda a: int(a * factor)))
+    out.putalpha(mark.getchannel("A").point(lambda a: int(a * factor)))
     return out
 
 
@@ -137,7 +151,7 @@ def _apply_watermark(image: Image.Image, values: dict, src: str, index: int, ste
         mark = _image_watermark(path, image.width, values)
         label = f"图片水印 ({os.path.basename(path)})"
     else:
-        seed = _extract_seed(image) if "{seed}" in (values.get("wm_text") or "") else ""
+        seed = _extract_seed(src) if "{seed}" in (values.get("wm_text") or "") else ""
         text = _substitute(values.get("wm_text") or "", src, index, image, seed).strip()
         if not text:
             steps.append("水印: 文字为空, 已跳过")
@@ -164,7 +178,8 @@ def _apply_watermark(image: Image.Image, values: dict, src: str, index: int, ste
         canvas.alpha_composite(mark, (max(0, x + margin), max(0, y + margin)))
         label += f" · {pos} · 边距 {margin}"
     mark.close()
-    if not keep_alpha and canvas.split()[-1].getextrema()[0] == 255:
+    # getchannel("A") 只取单个通道; 原先 canvas.split() 会把 RGBA 拆成 4 个 band 再丢掉 3 个
+    if not keep_alpha and canvas.getchannel("A").getextrema()[0] == 255:
         canvas = canvas.convert("RGB")  # 全不透明就没必要多带一个 alpha 通道
     steps.append(label)
     return canvas
@@ -256,7 +271,8 @@ def _apply_frame(image: Image.Image, values: dict, steps: list[str]) -> Image.Im
 def decorate_image(src: str, values: dict, index: int) -> tuple[Image.Image, dict, list[str], bool]:
     """先加边框再打水印, 返回 (图片, 元数据快照, 步骤说明, 原图是否含隐写数据)。"""
     image = open_image(src)
-    had_lsb = lsb.extract(image).get("found") or lsb.has_nai_data(image)
+    # 一次解码同时判断两种隐写 (原先 extract + has_nai_data 各解一遍全图)
+    had_lsb, _stego = lsb.has_any_stego(image)
     if image.mode == "P":
         image = image.convert("RGBA" if "transparency" in (image.info or {}) else "RGB")
     meta = grab_meta(image)

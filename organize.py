@@ -73,9 +73,12 @@ MANIFEST_KEYS = [
 # ---------------------------------------------------------------- 感知哈希
 
 
-def dhash(image: Image.Image, hash_size: int = 8) -> int:
-    """差值哈希: 缩成 (hash_size+1)×hash_size 灰度后逐行比较相邻像素, 得到 64 位指纹。"""
-    small = image.convert("L").resize((hash_size + 1, hash_size), Image.Resampling.LANCZOS)
+def dhash(image: Image.Image, hash_size: int = 8, gray: Image.Image | None = None) -> int:
+    """差值哈希: 缩成 (hash_size+1)×hash_size 灰度后逐行比较相邻像素, 得到 64 位指纹。
+
+    gray: 调用方已转好的灰度图 (可选); 与 quality_metrics 共用可省一次 convert("L")。
+    """
+    small = (gray or image.convert("L")).resize((hash_size + 1, hash_size), Image.Resampling.LANCZOS)
     pixels = list(small.getdata())
     bits = 0
     index = 0
@@ -89,8 +92,12 @@ def dhash(image: Image.Image, hash_size: int = 8) -> int:
 
 
 def hamming(a: int, b: int) -> int:
-    """两个指纹的汉明距离 (不同位的个数), 0 = 完全一致。"""
-    return bin(a ^ b).count("1")
+    """两个指纹的汉明距离 (不同位的个数), 0 = 完全一致。
+
+    用 int.bit_count() (Python 3.10+): 原先 bin(x).count("1") 每次比较都要先构造
+    一个字符串, 在 O(n×组数) 的聚类里是明显的常数开销。
+    """
+    return (a ^ b).bit_count()
 
 
 def group_duplicates(files: list[str], threshold: int) -> tuple[list[list[str]], dict[str, str]]:
@@ -126,9 +133,14 @@ def group_duplicates(files: list[str], threshold: int) -> tuple[list[list[str]],
 # ---------------------------------------------------------------- 质量指标
 
 
-def quality_metrics(image: Image.Image) -> dict:
-    """算清晰度 (边缘强度标准差) 与灰度统计 (均值 / 饱和度 / 纯色占比)。"""
-    gray = image.convert("L")
+def quality_metrics(image: Image.Image, gray: Image.Image | None = None) -> dict:
+    """算清晰度 (边缘强度标准差) 与灰度统计 (均值 / 饱和度 / 纯色占比)。
+
+    gray: 调用方已经转好的灰度图 (可选)。dhash() 内部也会转一次灰度, 同一张图
+    两处都转就白解一遍; 传入可复用。
+    """
+    if gray is None:
+        gray = image.convert("L")
     hist = gray.histogram()
     total = sum(hist) or 1
     mean = sum(i * count for i, count in enumerate(hist)) / total
@@ -146,13 +158,20 @@ def quality_metrics(image: Image.Image) -> dict:
     }
 
 
-def screen_quality(src: str, values: dict) -> tuple[dict, list[str]]:
-    """按阈值判定模糊 / 纯色 / 过曝 / 欠曝, 返回 (指标, 命中的问题标签)。"""
-    image = open_image(src)
-    try:
+def screen_quality(src: str, values: dict, image: Image.Image | None = None) -> tuple[dict, list[str]]:
+    """按阈值判定模糊 / 纯色 / 过曝 / 欠曝, 返回 (指标, 命中的问题标签)。
+
+    image: 调用方已打开的图片 (可选), 传入可避免对同一个文件再解码一次
+    (dedupe_action 在查重时已经解过一次)。
+    """
+    if image is not None:
         metrics = quality_metrics(image)
-    finally:
-        image.close()
+    else:
+        opened = open_image(src)
+        try:
+            metrics = quality_metrics(opened)
+        finally:
+            opened.close()
     items = values.get("quality_items")
     if items is None:
         items = QUALITY_ITEMS
@@ -212,9 +231,13 @@ def dedupe_action(values: dict) -> dict:
         )
     if with_quality:
         flagged: list[str] = []
-        for row, src in zip(rows, files):
+        # 用下标配对而不是 zip(rows, files): rows 与 files 必须严格一一对应,
+        # zip 在两者长度不一致时会静默错位 (把 A 的指标写进 B 的行)。
+        if len(rows) != len(files):
+            raise RuntimeError(f"内部错误: 报告行数与文件数不一致 ({len(rows)} != {len(files)})")
+        for index, src in enumerate(files):
             _metrics, flags = screen_quality(src, values)
-            row.append(" ".join(flags))
+            rows[index].append(" ".join(flags))
             if flags:
                 flagged.append(f"  {os.path.basename(src)}: {' '.join(flags)}")
         text_lines.append("")
@@ -332,18 +355,13 @@ def _template_values(src: str, index: int, values: dict) -> dict:
     """模板占位符的取值 (序号 / 原名 / 时间 / 尺寸 / 生成参数)。"""
     stat = os.stat(src)
     params = read_params(src)
-    image = None
+    # 只读图片头部拿尺寸: open_image() 会 .load() 整幅像素 (4K PNG 要几百毫秒),
+    # 而这里只需要两个整数。Image.open 本身是惰性的, 不 load 就能读到 .size。
     try:
-        image = open_image(src)
-        width, height = image.size
+        with Image.open(src) as _probe:
+            width, height = _probe.size
     except Exception:
         width = height = 0
-    finally:
-        if image is not None:
-            try:
-                image.close()
-            except Exception:
-                pass
     prompt = str(params.get("prompt") or "")
     limit = max(8, int(values.get("prompt_len") or 40))
     return {
@@ -360,9 +378,12 @@ def _template_values(src: str, index: int, values: dict) -> dict:
     }
 
 
+# 模板占位符正则 (模块级编译一次; 原先在 render_template 里每张图重编译一遍)
+_TEMPLATE_RX = re.compile(r"\{(\w+)(?::([^}]*))?\}")
+
+
 def render_template(template: str, mapping: dict) -> str:
     """渲染模板: `{index:03d}` 这种带格式说明的占位符走 Python 格式化, 其余取原值。"""
-    import re
 
     def replace(match) -> str:
         key, spec = match.group(1), match.group(2)
@@ -376,7 +397,7 @@ def render_template(template: str, mapping: dict) -> str:
                 return str(value)
         return str(value)
 
-    return re.sub(r"\{(\w+)(?::([^}]*))?\}", replace, template or "")
+    return _TEMPLATE_RX.sub(replace, template or "")
 
 
 def rename_action(values: dict) -> dict:

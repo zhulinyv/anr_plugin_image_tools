@@ -284,7 +284,8 @@ def enhance_image(src: str, values: dict) -> tuple[Image.Image, dict, list[str],
     返回 (图片, 元数据快照, 步骤说明, 原图是否含隐写数据)。
     """
     image = open_image(src)
-    had_lsb = lsb.extract(image).get("found") or lsb.has_nai_data(image)
+    # 一次解码同时判断两种隐写 (原先 extract + has_nai_data 各解一遍全图)
+    had_lsb, _stego = lsb.has_any_stego(image)
     if image.mode == "P":
         image = image.convert("RGBA" if "transparency" in (image.info or {}) else "RGB")
     if image.mode in ("CMYK", "YCbCr", "LAB", "HSV", "I", "F", "I;16"):

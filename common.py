@@ -4,7 +4,7 @@ from __future__ import annotations
 
 import csv
 import os
-import re
+from functools import lru_cache
 from io import BytesIO
 from pathlib import Path
 from typing import Any
@@ -13,10 +13,11 @@ from PIL import Image, ImageFont
 from PIL.PngImagePlugin import PngInfo
 
 from utils.helpers import check_stop, playsound, reset_stop
+from utils.images import IMAGE_EXTS  # noqa: F401  (对外仍以 common.IMAGE_EXTS 暴露)
+from utils.images import collect_images as _collect_images
+from utils.images import natural_key as _natural_key
+from utils.images import sort_images as _sort_images
 from utils.logger import logger
-
-# 可处理的图片扩展名
-IMAGE_EXTS = {".png", ".jpg", ".jpeg", ".webp", ".bmp", ".tif", ".tiff", ".avif", ".ico", ".gif"}
 
 # 输出格式 (插件面板可选项)
 OUTPUT_FORMATS = ["保持原格式", "png", "jpg", "webp", "avif", "tiff", "bmp"]
@@ -60,6 +61,23 @@ _NON_TEXT_KEYS = {
     "variety",
 }
 
+# 真二进制块: 读文本块时过滤, 且不像 comment 那样可以解码成文本
+_BINARY_INFO_KEYS = {
+    "icc_profile",
+    "icc profile",
+    "exif",
+    "thumbnail",
+    "photoshop",
+}
+
+# 非 PNG 格式的元数据键名不统一 (JPEG 只有小写的 comment), 归一成 NovelAI 的大写键
+_INFO_KEY_ALIASES = {
+    "comment": "Comment",
+    "description": "Description",
+    "software": "Software",
+    "source": "Source",
+}
+
 # 透明底合成色 (转 jpg / bmp 等不支持透明通道的格式时使用)
 ALPHA_BACKGROUNDS = {"白色": (255, 255, 255), "黑色": (0, 0, 0)}
 
@@ -71,6 +89,11 @@ _GRID_CELLS = {
     "左下": (0, 2), "下中": (1, 2), "右下": (2, 2),
 }
 
+# 九宫格偏移系数 (0=贴左/上, 1=居中, 2=贴右/下)。
+# 直接按系数算, 不再每次调用都新建 {0:..,1:..,2:..} 字典 (逐图热路径)。
+_ANCHOR_NUM = (0, 1, 2)
+_ANCHOR_DEN = (1, 2, 1)
+
 
 def grid_anchor(pos: str, container: tuple[int, int], item: tuple[int, int]) -> tuple[int, int]:
     """按九宫格把 `item` 放进 `container` 的一角/一边/正中, 返回左上角坐标。
@@ -80,8 +103,9 @@ def grid_anchor(pos: str, container: tuple[int, int], item: tuple[int, int]) -> 
     col, row = _GRID_CELLS.get(pos or "居中", (1, 1))
     width, height = container
     item_w, item_h = item
-    left = {0: 0, 1: (width - item_w) // 2, 2: width - item_w}[col]
-    top = {0: 0, 1: (height - item_h) // 2, 2: height - item_h}[row]
+    # 0 -> 0; 1 -> (W-w)//2; 2 -> W-w
+    left = 0 if col == 0 else ((width - item_w) // 2 if col == 1 else width - item_w)
+    top = 0 if row == 0 else ((height - item_h) // 2 if row == 1 else height - item_h)
     return left, top
 
 
@@ -120,11 +144,15 @@ FONT_CANDIDATES = [
 ]
 
 
+@lru_cache(maxsize=32)
 def load_font(size: int) -> tuple[Any, bool]:
     """取一个能画中文的字体, 返回 (字体对象, 是否成功加载到矢量字体)。
 
     加载不到矢量字体时回退到 Pillow 内置位图字体 (大小不可控, 中文可能画不出来),
     调用方据此在日志里给出提示。
+
+    带 lru_cache: 原实现每张图都要 os.path.exists + ttf 解析一次, 500 张的批处理
+    就是 500 次字体文件解析。字体对象是只读使用 (ImageDraw 不会修改字体)。
     """
     for candidate in FONT_CANDIDATES:
         if os.path.exists(candidate):
@@ -138,42 +166,20 @@ def load_font(size: int) -> tuple[Any, bool]:
         return ImageFont.load_default(), False
 
 
-def natural_key(name: str):
-    """自然排序键: 让 `2.png` 排在 `10.png` 前面 (序列帧合成动图时很重要)。"""
-    return [int(part) if part.isdigit() else part.lower() for part in re.split(r"(\d+)", name)]
-
-
-def sort_images(paths: list[str]) -> list[str]:
-    """按文件名自然排序 (稳定), 用于序列帧 / 拼图这类顺序敏感的场景。"""
-    return sorted(paths, key=lambda p: natural_key(os.path.basename(p)))
+# 自然排序 / 收集图片 统一在 utils.images (原先本文件与另外 5 处各有一份实现)
+natural_key = _natural_key
+sort_images = _sort_images
 
 
 # ---------------------------------------------------------------- 输入 / 输出
 
 
 def collect_images(path: str | None, image: str | None) -> list[str]:
-    """收集待处理图片: 先单张图片, 再目录内全部图片 (目录按文件名排序, 去重保留顺序)。"""
-    images: list[str] = []
-    if image:
-        images.append(image)
-    raw_path = (path or "").strip()
-    if raw_path:
-        root = Path(raw_path)
-        if root.is_file():
-            images.append(str(root))
-        elif root.is_dir():
-            # 自然排序: `2.png` 排在 `10.png` 前面 (序列帧合成动图 / 拼图顺序都依赖它)
-            images.extend(sort_images([str(p) for p in root.iterdir() if p.is_file() and p.suffix.lower() in IMAGE_EXTS]))
-        else:
-            raise ValueError(f"路径无效: {raw_path}")
-    result: list[str] = []
-    seen: set[str] = set()
-    for img in images:
-        key = os.path.abspath(img)
-        if key not in seen:
-            seen.add(key)
-            result.append(img)
-    return result
+    """收集待处理图片: 先单张图片, 再目录内全部图片 (目录按文件名自然排序, 去重保留顺序)。
+
+    统一委托给 utils.images.collect_images (全项目唯一实现)。
+    """
+    return _collect_images(path, image, exts=IMAGE_EXTS)
 
 
 def open_image(path: str) -> Image.Image:
@@ -256,10 +262,20 @@ def strip_prefix(values: dict, prefix: str) -> dict:
 # ---------------------------------------------------------------- 批量执行
 
 
+# 批处理并发度: Pillow 在解码/编码时基本都会释放 GIL, 多线程能吃到多核。
+# 原先是纯串行 for 循环, 300 张的批处理耗时是必要时间的 N 倍。
+# 上限压得比较保守: 同时开太多会把内存 (每张解码后的位图) 顶上去。
+BATCH_WORKERS = min(8, (os.cpu_count() or 4))
+# 单次批处理的提示音只放一次 (并发时由主线程在收尾处放)
+
+
 def each_image(path: str | None, image: str | None, worker, label: str = "处理"):
     """遍历输入图片执行 worker(src) -> (输出路径列表, 文本行)。
 
     返回 (输出图片, 错误信息, 文本行); 支持"停止"按钮 (每张图片前检查停止信号)。
+
+    用有界线程池并发处理 (见 BATCH_WORKERS); 结果顺序与输入顺序一致, 保证
+    提示文案/输出列表的顺序稳定。停止信号在提交每一项之前检查, 停止后不再提交新任务。
     """
     files = collect_images(path, image)
     if not files:
@@ -268,20 +284,48 @@ def each_image(path: str | None, image: str | None, worker, label: str = "处理
     outputs: list[str] = []
     errors: list[str] = []
     texts: list[str] = []
-    for src in files:
-        if check_stop():
-            logger.warning("已停止处理!")
-            texts.append("⏹ 已手动停止, 剩余图片未处理")
-            break
+
+    def _one(src: str):
+        outs, text = worker(src)
+        return outs or [], text
+
+    stopped = False
+    # 单张不折腾线程池 (省掉建池开销)
+    if len(files) == 1:
         try:
-            outs, text = worker(src)
-            outputs.extend(outs or [])
+            outs, text = _one(files[0])
+            outputs.extend(outs)
             if text:
                 texts.append(text)
         except Exception as e:
-            logger.error(f"{label}失败 ({src}): {e}")
+            logger.error(f"{label}失败 ({files[0]}): {e}")
             logger.opt(exception=True).debug(f"{label}失败堆栈:")
-            errors.append(f"{os.path.basename(src)}: {e}")
+            errors.append(f"{os.path.basename(files[0])}: {e}")
+        return outputs, errors, texts
+
+    from concurrent.futures import ThreadPoolExecutor
+
+    with ThreadPoolExecutor(max_workers=BATCH_WORKERS, thread_name_prefix="anr-batch") as ex:
+        futures = []
+        for src in files:
+            if check_stop():
+                stopped = True
+                logger.warning("已停止处理!")
+                break
+            futures.append((src, ex.submit(_one, src)))
+        # 按提交顺序回收, 保证输出顺序 = 输入顺序
+        for src, fut in futures:
+            try:
+                outs, text = fut.result()
+                outputs.extend(outs)
+                if text:
+                    texts.append(text)
+            except Exception as e:
+                logger.error(f"{label}失败 ({src}): {e}")
+                logger.opt(exception=True).debug(f"{label}失败堆栈:")
+                errors.append(f"{os.path.basename(src)}: {e}")
+    if stopped:
+        texts.append("⏹ 已手动停止, 剩余图片未处理")
     return outputs, errors, texts
 
 
@@ -318,14 +362,27 @@ def build_result(
 
 
 def read_png_text(image: Image.Image) -> dict[str, str]:
-    """读取 PNG 文本块 (tEXt/iTXt/zTXt); 非 PNG 回退到 info 中的字符串项。"""
+    """读取 PNG 文本块 (tEXt/iTXt/zTXt); 非 PNG 回退到 info 中的文本项。
+
+    JPEG 的 NovelAI 参数在 COM 注释段里, Pillow 暴露为 bytes 类型的 info["comment"],
+    这里解码后按 NovelAI 的惯例归一成 "Comment" 键, 与 PNG 文本块走同一条通路。
+    """
     data: dict[str, str] = {}
     text = getattr(image, "text", None)
     if isinstance(text, dict):
         data.update({str(k): str(v) for k, v in text.items()})
     for key, value in (image.info or {}).items():
-        if isinstance(value, str) and key not in _NON_TEXT_KEYS and key not in data:
-            data[key] = value
+        lower = key.lower() if isinstance(key, str) else key
+        if lower in _NON_TEXT_KEYS or lower in _BINARY_INFO_KEYS:
+            continue
+        if isinstance(value, (bytes, bytearray)):
+            try:
+                value = bytes(value).decode("utf-8", "replace")
+            except Exception:
+                continue
+        if not isinstance(value, str):
+            continue
+        data[_INFO_KEY_ALIASES.get(lower, key)] = value
     return data
 
 

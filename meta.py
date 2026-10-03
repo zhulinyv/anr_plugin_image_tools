@@ -8,8 +8,9 @@
 
 from __future__ import annotations
 
+import hashlib
+import itertools
 import os
-import time
 
 import ujson
 from PIL import ExifTags, Image
@@ -174,15 +175,44 @@ def read_params(src: str) -> dict:
         image.close()
 
 
+# 载荷导出目录的保留上限: 原实现每读一次就写一个带时间戳的新文件且从不清理,
+# 反复读取同一目录会无限堆积。改为按内容哈希命名 (同内容只存一份) + 数量上限。
+_DUMP_ROOT = os.path.join("outputs", "lsb_extract")
+_DUMP_KEEP = 200
+
+
+def _prune_dump_dir() -> None:
+    """导出文件数超过上限时按修改时间删除最旧的一半 (失败无影响)。"""
+    try:
+        entries = [
+            os.path.join(_DUMP_ROOT, n) for n in os.listdir(_DUMP_ROOT) if n.endswith((".txt", ".bin", ".png", ".jpg"))
+        ]
+        if len(entries) <= _DUMP_KEEP:
+            return
+        entries.sort(key=lambda p: os.path.getmtime(p))
+        for path in entries[: len(entries) // 2]:
+            try:
+                os.unlink(path)
+            except OSError:
+                pass
+    except OSError:
+        pass
+
+
 def _dump_payload(src: str, data: bytes, ext: str = "") -> str:
-    """把读到的隐写载荷导出到 outputs/lsb_extract (报告里只展示预览, 二进制内容不丢)。"""
-    root = os.path.join("outputs", "lsb_extract")
-    os.makedirs(root, exist_ok=True)
+    """把读到的隐写载荷导出到 outputs/lsb_extract (报告里只展示预览, 二进制内容不丢)。
+
+    文件名 = 原名 + 内容哈希: 同一张图反复读取只会覆盖同一个文件, 不再每次生成
+    一个新的时间戳文件 (原来的行为会让该目录无限增长)。
+    """
+    os.makedirs(_DUMP_ROOT, exist_ok=True)
     if not ext:
         ext = ".txt" if lsb.is_text_payload(data) else ".bin"
-    path = os.path.join(root, f"{os.path.splitext(os.path.basename(src))[0]}_{int(time.time() * 1000)}{ext}")
+    digest = hashlib.sha1(data).hexdigest()[:12]
+    path = os.path.join(_DUMP_ROOT, f"{os.path.splitext(os.path.basename(src))[0]}_{digest}{ext}")
     with open(path, "wb") as f:
         f.write(data)
+    _prune_dump_dir()
     return os.path.abspath(path)
 
 
@@ -515,14 +545,24 @@ def clear_metadata(src: str, values: dict) -> tuple[list[str], str]:
 # ---------------------------------------------------------------- 动作入口
 
 
+# 报告展示上限: 每份报告都可能很长 (含 LSB 载荷预览)
+_REPORT_LIMIT = 20
+
+
 def read_action(values: dict) -> dict:
     """动作: 读取元数据与隐写内容 (报告写入结果文本框)。"""
     password = values.get("password") or ""
-    reports: list[str] = []
+    # 用字典 + 序号存放, 且只保留前 _REPORT_LIMIT 份正文:
+    # 原实现把所有图片的报告 (含整段 LSB 载荷预览) 都堆在内存里最后才切片,
+    # 目录一大就是几十 MB 的无用内存。序号用于保证并发下顺序稳定。
+    reports: dict[int, str] = {}
+    counter = itertools.count()
 
     def worker(src: str):
+        index = next(counter)
         report, _ = read_report(src, password)
-        reports.append(report)
+        if index < _REPORT_LIMIT:
+            reports[index] = report
         return [], None
 
     _, errors, _ = each_image(
@@ -534,11 +574,8 @@ def read_action(values: dict) -> dict:
     if not reports:  # 全部失败: 直接报错 (前端提示更清晰)
         raise ValueError("读取失败: " + ("; ".join(errors) if errors else "请提供单张图片或批处理路径"))
     if errors:
-        reports.append("❌ 读取失败:\n" + "\n".join(errors))
-    limit = 20
-    content = "\n\n".join(reports[:limit])
-    if len(reports) > limit:
-        content += f"\n\n... 另有 {len(reports) - limit} 张图片未显示"
+        reports[len(reports)] = "❌ 读取失败:\n" + "\n".join(errors)
+    content = "\n\n".join(reports[i] for i in sorted(reports))
     message = f"已读取 {len(reports) - (1 if errors else 0)} 张图片的元数据"
     return {"content": content, "text": message, "message": message}
 
