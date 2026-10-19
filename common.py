@@ -289,7 +289,6 @@ def each_image(path: str | None, image: str | None, worker, label: str = "处理
         outs, text = worker(src)
         return outs or [], text
 
-    stopped = False
     # 单张不折腾线程池 (省掉建池开销)
     if len(files) == 1:
         try:
@@ -305,6 +304,8 @@ def each_image(path: str | None, image: str | None, worker, label: str = "处理
 
     from concurrent.futures import ThreadPoolExecutor
 
+    # stopped 只在批处理路径有意义: 单图分支在上面已经 return 了
+    stopped = False
     with ThreadPoolExecutor(max_workers=BATCH_WORKERS, thread_name_prefix="anr-batch") as ex:
         futures = []
         for src in files:
